@@ -1,0 +1,302 @@
+---
+title: "Practical Machine Learning - Course Project"
+author: "Dinesh Srivastava"
+date: "Wednesday, October 22, 2014"
+output: html_document
+---
+
+Predict the manner in which the Weight Lifting Exercises are done.
+========================================================
+
+###I. Synopsis
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement - a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it.
+
+In this project, the goal is to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. The goal of this project is to predict the manner in which they did the exercise.
+
+
+The *Weight Lifting Exercises Dataset* is harvested from following paper:
+
+Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H. [Qualitative Activity Recognition of Weight Lifting Exercises](http://groupware.les.inf.puc-rio.br/work.jsf?p1=11201). Proceedings of 4th International Conference in Cooperation with SIGCHI (Augmented Human '13) . Stuttgart, Germany: ACM SIGCHI, 2013.
+
+
+###II. General Housekeeping
+
+
+```{r}
+
+library(AppliedPredictiveModeling)
+library(caret)
+library(rattle)
+library(rpart.plot)
+library(randomForest)
+
+```
+
+###III. Downloading and preprocessing data files
+
+*Step 1: Download data files*
+
+```{r}
+
+if (!file.exists("./pml-training.csv")) {
+    download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv", destfile = "./pml-training.csv")
+}
+
+if (!file.exists("./pml-testing.csv")) {
+    download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv", destfile = "./pml-testing.csv")
+}
+
+```
+
+*Step 2: Import data treating empty values as NA*
+
+```{r}
+
+# Import data while substituting empty values as 'NA'.
+        training <- read.csv("./pml-training.csv", na.strings=c("NA",""), header=TRUE)
+        colnames_train <- colnames(training)
+
+        testing <- read.csv("./pml-testing.csv", na.strings=c("NA",""), header=TRUE)
+        colnames_test <- colnames(testing)
+
+# Verify that the column names (excluding classe and problem_id) are identical in both the training and the test set.
+        all.equal(colnames_train[1:length(colnames_train)-1], colnames_test[1:length(colnames_train)-1])
+
+```
+
+
+*Step 3: Eliminate columns with 'NA' and other columns irrelavent to the prediction, such as, 'user_name', 'timestamp', 'new_window', etc.* 
+
+```{r}
+
+# Count the number of non-NAs in each column
+        nonNAs <- function(x) {
+                as.vector(apply(x, 2, function(x) length(which(!is.na(x)))))
+                }
+
+# Build vector of missing data or NA columns to drop.
+        colcnts <- nonNAs(training)
+        drops <- c()
+        for (cnt in 1:length(colcnts)) {
+                if (colcnts[cnt] < nrow(training)) {
+                        drops <- c(drops, colnames_train[cnt])
+                        }
+                }
+
+# Drop NA data and the first 7 columns as they are unnecessary for prediction.
+        training <- training[,!(names(training) %in% drops)]
+        training <- training[,8:length(colnames(training))]
+
+        testing <- testing[,!(names(testing) %in% drops)]
+        testing <- testing[,8:length(colnames(testing))]
+
+# Show columns of final data sets.
+        colnames(training)
+        colnames(testing)
+
+```
+
+*Step 4: Remove near zero covariates* 
+
+```{r}
+
+# Remove near zero covariates
+        nsv <- nearZeroVar(training,saveMetrics=TRUE)
+        nsv
+
+        training <- training[,!nsv$nzv]
+        testing <- testing[,!nsv$nzv]
+        
+#        nsv
+```
+
+Given that all of the near zero variance variables (nsv) are FALSE, there's no need to eliminate any covariates due to lack of variablility.
+
+
+###IV. Split data to training and testing for cross validation.
+
+```{r}
+
+        inTrain <- createDataPartition(y=training$classe, p=0.7, list=FALSE)
+        new_training <- training[inTrain,]
+        new_testing <- training[-inTrain,]
+
+        dim(new_training)
+        dim(new_testing)
+
+```
+
+We got 13737 samples and 53 variables for training, 5885 samples and 53 variables for testing.
+
+
+###V. Analysis
+####1. Regression Tree
+
+Now we fit a tree to these data, and summarize and plot it. First, we use the 'tree' package. It is much faster than 'caret' package.
+
+```{r}
+
+#install.packages("tree")
+library(tree)
+set.seed(32323)
+        tree.training=tree(classe~.,data=new_training)
+        summary(tree.training)
+
+        plot(tree.training)
+        text(tree.training, pretty=0, cex =.8)
+
+```
+
+This is a bushy tree, and it needs to be pruned. Print the tree for detailed summary of the tree.
+
+####2. Use Rpart form Caret (very slow processing)
+
+
+```{r}
+
+library(caret)
+set.seed(32323)
+
+        modFit <- train(classe ~ .,method="rpart",data=new_training)
+        print(modFit$finalModel)
+
+```
+
+
+```{r}
+# Draw a Prettier plot
+
+library(rattle)
+fancyRpartPlot(modFit$finalModel)
+
+```
+
+The result from 'caret' 'rpart' package is close to 'tree' package.
+
+
+####3. Cross Validation
+
+Check the performance of the tree on the testing data by cross validation.
+
+```{r}
+        tree.pred=predict(tree.training,new_testing,type="class")
+        predMatrix = with(new_testing,table(tree.pred,classe))
+        sum(diag(predMatrix))/sum(as.vector(predMatrix)) # error rate for tree
+```
+
+The error rate 0.67 is not very accurate.
+
+```{r}
+        tree.pred=predict(modFit,new_testing)
+        predMatrix = with(new_testing,table(tree.pred,classe))
+        sum(diag(predMatrix))/sum(as.vector(predMatrix)) # error rate for caret
+```
+
+The error rate 0.50 from 'caret' package is much lower than the result from 'tree' package.
+
+
+####4. Pruning the tree
+
+Use Cross Validation to prune the tree.
+
+```{r}
+        cv.training=cv.tree(tree.training,FUN=prune.misclass)
+        cv.training
+```
+
+```{r}
+        plot(cv.training)
+```
+
+
+The plot shows that when the size of the tree goes down, the deviance goes up. It means the 16 is a good size (i.e. number of terminal nodes) for this tree. We do not need to prune it.
+
+Suppose we prune it at size of nodes at 12.
+
+```{r}
+        prune.training=prune.misclass(tree.training,best=12)
+#plot(prune.training);text(prune.training,pretty=0,cex =.8 )
+```
+
+
+Now lets evaluate this pruned tree on the test data.
+
+
+```{r}
+        tree.pred=predict(prune.training,new_testing,type="class")
+        predMatrix = with(new_testing,table(tree.pred,classe))
+        sum(diag(predMatrix))/sum(as.vector(predMatrix)) # error rate
+```
+
+
+The error rate 0.62 is a little less than 0.67, so pruning did not hurt us with respect to misclassification errors, and gave us a simpler tree. We use less predictors to get almost the same result. By pruning, we got a shallower tree, which is easier to interpret.
+
+The single tree is not good enough, so we should use random forests.
+
+
+###VI. Random Forests
+
+These methods use trees as building blocks to build more complex models.
+
+####1. Random Forests
+
+Random forests build lots of bushy trees and then average them to reduce the variance.
+
+
+```{r}
+
+library(randomForest)
+set.seed(32323)
+
+#Lets fit a random forest and see how well it performs.
+
+        rf.training=randomForest(classe~.,data=new_training,ntree=100, importance=TRUE)
+        rf.training
+
+        #plot(rf.training, log="y")
+        varImpPlot(rf.training,)
+
+        #rf.training1=randomForest(classe~., data=new_training, proximity=TRUE )
+        #DSplot(rf.training1, new_training$classe)
+
+```
+
+we can see which variables have higher impact on the prediction.
+
+
+###VII. Out-of Sample Accuracy
+
+Our Random Forest model shows OOB (out-of-bag) estimate of error rate: 0.61% for the training data. Now we will predict it for out-of sample accuracy.
+
+Lets evaluate this tree on the test data.
+
+```{r}
+
+        tree.pred=predict(rf.training,new_testing,type="class")
+        predMatrix = with(new_testing,table(tree.pred,classe))
+        sum(diag(predMatrix))/sum(as.vector(predMatrix)) # error rate
+
+```
+
+
+*0.995582 means we got a very accurate estimate.*
+
+No. of variables tried at each split: 7. It means every time we only randomly use 7 predictors to grow the tree. Since p = 53, we can have it from 1 to 53, but it seems 7 is enough to get the good result.
+
+
+
+###VIII. Conclusion
+
+Now we can predict the testing data from the website.
+
+```{r}
+
+        answers <- predict(rf.training, testing)
+        answers
+
+```
+
+It shows that this random forest model performed a better job.
+
+
+.
